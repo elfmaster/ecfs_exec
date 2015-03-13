@@ -5,7 +5,13 @@
 #define ALIGNDOWN(k, v) ((unsigned long)(k)&(~((unsigned long)(v)-1)))
 
 
-void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehdr **ldso_ehdr)
+
+/* 
+ * Its very easy to load an ecfs file. The dynamic linker, the stack,
+ * the heap, etc. is already in the file so loading it doesn't require
+ * any of the extra work needed in a regular ul_exec (e.g. grugqs ul_exec)
+ */
+void * load_ecfs_binary(char *mapped, int fixed)
 {
         Elf64_Ehdr *ehdr;
         Elf64_Phdr *phdr, *interp = NULL;
@@ -19,6 +25,7 @@ void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehd
         unsigned long map_addr = 0, rounded_len, k;
         unsigned long unaligned_map_addr = 0;
         void *segment;
+	struct stat st;
         int i;
 
         if (fixed)
@@ -28,10 +35,6 @@ void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehd
         entry_point = (void *)ehdr->e_entry;
         
         for (i = 0; i < ehdr->e_phnum; i++) {
-                if (phdr[i].p_type == PT_INTERP) {
-                        interp = (Elf64_Phdr *)&phdr[i];
-                        continue;
-                } 
                 if (phdr[i].p_type != PT_LOAD)
                         continue;
                 if (text_segment && !fixed) {
@@ -54,7 +57,7 @@ void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehd
                 segment = mmap(
                         (void *)map_addr,
                         rounded_len,
-                        PROT_READ|PROT_WRITE|PROT_EXEC, mapflags, -1, 0
+                        PROT_NONE, mapflags, -1, 0
                 );
 		
 		if (segment == MAP_FAILED ) {
@@ -69,10 +72,9 @@ void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehd
                 );      
 
                 if (!text_segment) {
-                	*elf_ehdr = segment;
                     	text_segment = segment;
                      	initial_vaddr = phdr[i].p_vaddr;
-                        if (!fixed)
+                        if (!fixed) 
                         	entry_point = (void *)((unsigned long)entry_point
                                 - (unsigned long)phdr[i].p_vaddr
                                	+ (unsigned long)text_segment);
@@ -95,118 +97,9 @@ void * load_elf_binary(char *mapped, int fixed, Elf64_Ehdr **elf_ehdr, Elf64_Ehd
                 if (k > brk_addr) 
                         brk_addr = k;
         }
-        if (interp) {
-                Elf64_Ehdr *junk_ehdr = NULL;
-                char *name = (char *)&mapped[interp->p_offset];
-                int fd = open(name, O_RDONLY);
-                uint8_t *map = (uint8_t *)mmap(0, LINKER_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
-                if (map == (void *)MAP_FAILED) {
-			perror("mmap");
-                        exit(-1);
-                }
-                entry_point = (void *)load_elf_binary(map, 0, ldso_ehdr, &junk_ehdr);
-        }
-
-        if (fixed)
-                brk(ROUNDUP(brk_addr, 0x1000));
 
         return (void *)entry_point;
 
 }
-
-unsigned long * create_stack(void)
-{
-        uint8_t *mem;
-        mem = mmap(NULL, STACK_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_GROWSDOWN|MAP_ANONYMOUS, -1, 0);
-        if(mem == MAP_FAILED) {
-		perror("mmap");
-		exit(-1);
-        }
-        return (unsigned long *)(mem + STACK_SIZE);
-}
-
-ElfW(Addr) build_auxv_stack(struct argdata *args)
-{
-        uint64_t *esp, *envp, *argv, esp_start;
-        int i, count, totalsize, stroffset, len, argc;
-        char *strdata, *s;
-        void *stack;
-        Elf64_auxv_t *auxv;
-
-        count += sizeof(int); // argc
-        count += args->argcount * sizeof(char *);
-        count += sizeof(void *); // NULL
-        count += args->envpcount * sizeof(char *);
-        count += sizeof(void *); // NULL
-        count += AUXV_COUNT * sizeof(Elf64_auxv_t);
-        
-        count = (count + 16) & ~(16 - 1);
-        totalsize = count + args->envplen + args->arglen;
-        totalsize = (totalsize + 16) & ~(16 - 1);
-        
-        stack = (void *)create_stack();
-        
-        esp = (uint64_t *)stack;
-        uint64_t *sp = esp = esp - (totalsize / sizeof(void *));
-        esp_start = (uint64_t)esp;
-        strdata = (char *)(esp_start + count);  
-        
-        s = args->argstr;
-        argv = esp;
-        envp = argv + args->argcount + 1;
-        
-        *esp++ = args->argcount;
-        for (argc = args->argcount; argc > 0; argc--) {
-                strcpy(strdata, s);
-                len = _strlen(s) + 1;
-                s += len;
-                *esp++ = (uintptr_t)strdata;
-                strdata += len;
-        }
-        
-        *esp++ = (uintptr_t)0;
-	for (s = args->envstr, i = 0; i < args->envpcount; i++) {
-                strcpy(strdata, s);
-                len = _strlen(s) + 1;
-                s += len;
-                *esp++ = (uintptr_t)strdata;
-                strdata += len;
-        }
-        
-        *esp++ = (uintptr_t)0;
-                
-        /*
-         * Fill out auxillary vector portion of stack
-         * so we now have:
-         * [argc][argv][envp][auxillary vector][argv/envp strings]
-         */
-        memcpy((void *)esp, (void *)args->saved_auxv->vector, args->saved_auxv->size);
-        auxv = (Elf64_auxv_t *)esp;
-        for (i = 0; auxv->a_type != AT_NULL; auxv++)
-        {
-                switch(auxv->a_type) {
-                        case AT_PAGESZ:
-                                auxv->a_un.a_val = PAGE_SIZE;
-                                break;
-                        case AT_PHDR:
-                                auxv->a_un.a_val = elf->textVaddr + elf->ehdr->e_phoff;
-                                break;
-                        case AT_PHNUM:
-                                auxv->a_un.a_val = elf->ehdr->e_phnum;
-                                break;
-                        case AT_BASE:
-                                auxv->a_un.a_val = (unsigned long)linker->text;
-                                break;
-                        case AT_ENTRY:
-                                auxv->a_un.a_val = elf->ehdr->e_entry;
-                                break;
-                        
-                }
-        }
-
-        return esp_start;
-
-}
-
 
 

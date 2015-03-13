@@ -1,36 +1,34 @@
 #include "ecfs_exec.h"
 
-int main(int argc, char **argv)
+int ecfs_exec(const char *filename)
 {
 	ecfs_elf_t *ecfs_desc;
-	ecfs_exec_t *exec_desc;
+	struct elf_prstatus *prstatus;
+	int prcount;
+	struct user_regs_struct *regs;
 
-	if (argc < 2) {
-		printf("Usage: %s <ecfs_file>\n", argv[0]);
-		exit(0);
-	}
-	
-	if ((desc = load_ecfs_file(argv[1])) == NULL) {
+	if ((ecfs_desc = load_ecfs_file(argv[1])) == NULL) {
 		printf("error loading file: %s\n", argv[1]);
 		exit(-1);
 	}
 	
 	/*
-	 * Move some things from the ecfs descriptor into
-	 * our own private descriptor specifically for the
-	 * ecfs exec project (because it has some other stuff
-	 * that we need, such as info for the linker.
+ 	 * Convert register set into user_regs_struct for each thread
+	 * that was in the process represented by the ecfs file.
  	 */
-	exec_desc->textVaddr = ecfs_desc->textVaddr;
-	exec_desc->dataVaddr = ecfs_desc->dataVaddr;
-	exec_desc->textSize = ecfs_desc->textSize;
-	exec_desc->dataSize = ecfs_desc->dataSize;
-	exec_desc->textOff = ecfs_desc->textOff;
-	exec_desc->dataOff = ecfs_desc->dataOff;
+	prcount = get_prstatus_structs(ecfs_desc, &prstatus);
+	regs = malloc(prcount * sizeof(struct user_regs_struct));
+	for (i = 0; i < prcount; i++) 
+		memcpy(&regs[i], &prstatus[i].pr_reg, sizeof(struct user_regs_struct));
+	
+	
+        void *entry = load_ecfs_binary(ecfs_desc->mem, 1);
+        if (entry == NULL) {
+                fprintf(stderr, "load_ecfs_binary() failed\n");
+                return -1;
+        }
 
-
-
-
+	
 
 }
 

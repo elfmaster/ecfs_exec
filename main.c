@@ -1,14 +1,139 @@
 #include "ecfs_exec.h"
 
+#define TRAMP_ADDR 0xc000000
+#define TRAMP_SIZE 4096
+
+/* 
+ * This creates a code page with instructions to load 
+ * the registers with the register set from the snapshotted
+ * process
+ */
+static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned long entry)
+{
+	uint8_t *trampoline;
+	uint8_t *tptr;
+	
+	trampoline = mmap(NULL, TRAMP_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (trampoline == MAP_FAILED ) {
+		perror("mmap");
+		exit(-1);
+	}
+	tptr = trampoline;
+	
+	/*
+	 * The following instructions are to set all of the registers
+	 * i.e: movabs $value, %rax (For each general purpose reg)
+	 */
+	
+	*tptr++ = 0x48;
+	*tptr++ = 0xb8;
+	*(long *)tptr = regs->rax;
+	tptr += 8;
+	
+        *tptr++ = 0x48;
+        *tptr++ = 0xbb;
+        *(long *)tptr = regs->rbx;
+        tptr += 8;
+	
+        *tptr++ = 0x48;
+        *tptr++ = 0xb9;
+        *(long *)tptr = regs->rcx;
+        tptr += 8;
+
+        *tptr++ = 0x48;
+        *tptr++ = 0xba;
+        *(long *)tptr = regs->rdx;
+        tptr += 8;
+	
+        *tptr++ = 0x48;
+        *tptr++ = 0xbf;
+        *(long *)tptr = regs->rdi;
+        tptr += 8;
+
+        *tptr++ = 0x48;
+        *tptr++ = 0xbe;
+        *(long *)tptr = regs->rsi;
+        tptr += 8;
+
+	*tptr++ = 0x49;
+        *tptr++ = 0xbf;
+        *(long *)tptr = regs->r15;
+        tptr += 8;
+
+        *tptr++ = 0x49;
+        *tptr++ = 0xbe;
+        *(long *)tptr = regs->r14;
+        tptr += 8;
+
+        *tptr++ = 0x49;
+        *tptr++ = 0xbd;
+        *(long *)tptr = regs->r13;
+        tptr += 8;
+	
+        *tptr++ = 0x49;
+        *tptr++ = 0xbc;
+        *(long *)tptr = regs->r12;
+        tptr += 8;
+
+        *tptr++ = 0x49; 
+        *tptr++ = 0xbb;
+        *(long *)tptr = regs->r11;
+        tptr += 8;
+
+        *tptr++ = 0x49; 
+        *tptr++ = 0xba;
+        *(long *)tptr = regs->r10;
+        tptr += 8;
+
+        *tptr++ = 0x49; 
+        *tptr++ = 0xb9;
+        *(long *)tptr = regs->r9;
+        tptr += 8;
+
+        *tptr++ = 0x49; 
+        *tptr++ = 0xb8;
+        *(long *)tptr = regs->r8;
+        tptr += 8;
+	
+	/*
+ 	 * Set rsp
+	 */
+	*tptr++ = 0x48;
+	*tptr++ = 0xbc;
+	*(long *)tptr = regs->rsp;
+	tptr += 8;
+
+	/*
+	 * XXX: temporary until we figure
+	 * out a way that doesn't clobber
+	 * movabs $entry, %r11
+	 * jmpq *%r11
+	 */
+	*tptr++ = 0x49;
+	*tptr++ = 0xbb;
+	*(long *)tptr = entry;
+	tptr += 8;
+	
+	*tptr++ = 0x41;
+	*tptr++ = 0xff;
+	*tptr++ = 0xe3;
+	
+	printf("Returning: %lx\n", trampoline);
+	return (unsigned long)trampoline;
+}
+
 int ecfs_exec(char **argv, const char *filename)
 {
 	int i, ret;
 	ecfs_elf_t *ecfs_desc;
+	siginfo_t siginfo;
 	struct elf_prstatus *prstatus;
 	int prcount;
 	struct user_regs_struct *regs;
 	const char *old_prog = argv[0];
-	void *entry;
+	void *fault_address;
+	void *entrypoint, *stack;
+	void (*tramp_code)(void);
 
 	if ((ecfs_desc = load_ecfs_file(filename)) == NULL) {
 		printf("error loading file: %s\n", argv[1]);
@@ -24,16 +149,25 @@ int ecfs_exec(char **argv, const char *filename)
 	for (i = 0; i < prcount; i++) 
 		memcpy(&regs[i], &prstatus[i].pr_reg, sizeof(struct user_regs_struct));
 	
+	get_siginfo(ecfs_desc, &siginfo);
+		
+	entrypoint = (void *)regs[0].rip;
+	stack = (void *)regs[0].rsp;
 	
 	do_unmappings(old_prog);
 
-        ret = load_ecfs_binary(ecfs_desc->mem);
+	printf("[+] Using entry point (for %%rip): %p\n", entrypoint);
+        printf("[+] Using stack: %p\n", stack);
+ 
+	ret = load_ecfs_binary(ecfs_desc->mem);
         if (ret == -1) {
                 fprintf(stderr, "load_ecfs_binary() failed\n");
                 return -1;
         }
+	unsigned long tramp_addr = create_reg_loader(&regs[0], (unsigned long)entrypoint);
+	tramp_code = (void *)tramp_addr;
+	tramp_code();
 
-	
 	exit(0);
 }
 

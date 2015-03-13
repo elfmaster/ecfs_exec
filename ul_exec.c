@@ -31,7 +31,6 @@ int load_ecfs_binary(uint8_t *mapped)
 		/* don't remap vsyscall */
 		if (phdr[i].p_vaddr == 0xffffffffff600000)
 			continue;
-		printf("addr: %lx len: %lx\n", phdr[i].p_vaddr, phdr[i].p_memsz);
 		segment = mmap((void *)phdr[i].p_vaddr, phdr[i].p_memsz, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
 		if (segment == MAP_FAILED) {
 			perror("mmap");
@@ -40,7 +39,6 @@ int load_ecfs_binary(uint8_t *mapped)
 		/*
 		 * note: in ecfs files memsz and filesz are the same
 		 */
-		printf("offset: %lx\n", phdr[i].p_offset);
 		memcpy(segment, &mem[phdr[i].p_offset], phdr[i].p_memsz);
 	}
 	

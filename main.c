@@ -118,7 +118,6 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	*tptr++ = 0xff;
 	*tptr++ = 0xe3;
 	
-	printf("Returning: %lx\n", trampoline);
 	return (unsigned long)trampoline;
 }
 
@@ -155,9 +154,9 @@ int ecfs_exec(char **argv, const char *filename)
 	stack = (void *)regs[0].rsp;
 	
 	do_unmappings(old_prog);
-
-	printf("[+] Using entry point (for %%rip): %p\n", entrypoint);
-        printf("[+] Using stack: %p\n", stack);
+		
+	//printf("[+] Using entry point (for %%rip): %p\n", entrypoint);
+       // printf("[+] Using stack: %p\n", stack);
  
 	ret = load_ecfs_binary(ecfs_desc->mem);
         if (ret == -1) {

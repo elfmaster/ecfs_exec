@@ -10,7 +10,6 @@ int do_unmappings(const char *progname)
 		perror("fopen");
 		return -1;
 	}
-	printf("progname: %s", progname);
 	while (fgets(buf, sizeof(buf), fd)) {
 		if (strstr(buf, progname)) {
 			memcpy(orig, buf, 512);
@@ -22,8 +21,6 @@ int do_unmappings(const char *progname)
 			q = strchr(p, 0x20);
 			*q = '\0';
 			end = strtoul(p, NULL, 16);
-			printf("line: %s", orig);
-			printf("unmapping  %lx - %lx\n", start, end);
 			munmap((void *)start, end - start);
 		}
 	}	

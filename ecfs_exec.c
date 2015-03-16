@@ -21,6 +21,38 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	}
 	tptr = trampoline;
 	
+        /*
+         * Set rsp
+         */
+        *tptr++ = 0x48;
+        *tptr++ = 0xbc;
+        *(long *)tptr = regs->rsp;
+        tptr += 8;
+
+	/*
+	 * Store entry point address at top of stack
+	 * sub 0x8, %rsp
+	 */
+	*tptr++ = 0x48;
+	*tptr++ = 0x83;
+	*tptr++ = 0xec;
+	*tptr++ = 0x10;
+	
+	/*
+	 * movq $value, %rax
+	 */
+	*tptr++ = 0x48;
+	*tptr++ = 0xb8;
+	*(long *)tptr = entry;
+	tptr += 8;
+	
+	/*
+	 * movq %rax, (%rsp)
+	 */
+	*tptr++ = 0x48;
+	*tptr++ = 0x89;
+	*tptr++ = 0x04;
+	*tptr++ = 0x24;
 	/*
 	 * The following instructions are to set all of the registers
 	 * i.e: movabs $value, %rax (For each general purpose reg)
@@ -97,33 +129,23 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
         tptr += 8;
 	
 	/*
- 	 * Set rsp
+	 * ret
 	 */
-	*tptr++ = 0x48;
-	*tptr++ = 0xbc;
-	*(long *)tptr = regs->rsp;
-	tptr += 8;
+	*tptr++ = 0xc2;
+	*tptr++ = 0x08;
+	*tptr++ = 0x00;
 
-	/*
-	 * XXX: temporary until we figure
-	 * out a way that doesn't clobber
-	 * movabs $entry, %r11
-	 * jmpq *%r11
-	 */
-	*tptr++ = 0x49;
-	*tptr++ = 0xbb;
-	*(long *)tptr = entry;
-	tptr += 8;
-	
-	*tptr++ = 0x41;
-	*tptr++ = 0xff;
-	*tptr++ = 0xe3;
-	
 	return (unsigned long)trampoline;
 }
 
+/*
+ * Set up file descriptor state for
+ * snapshot execution.
+ */
 void reload_file_desc(fd_info_t *fdinfo)
 {
+	int ret;
+
 	if (fdinfo->fd <= 3)
 		return;
 	if (fdinfo->net)
@@ -132,10 +154,14 @@ void reload_file_desc(fd_info_t *fdinfo)
 		return;
 	int fd = open(fdinfo->path, fdinfo->perms);
 	if (fd < 0) {
-		perror("open");
+		fprintf(stderr, "[ecfs_exec]: failed to open(%s, %04x): %s\n", fdinfo->path, fdinfo->perms, strerror(errno));
 		exit(-1);
 	}
-	lseek(fd, fdinfo->pos, SEEK_SET);
+	ret = lseek(fd, fdinfo->pos, SEEK_SET);
+	if (ret < 0) {
+		fprintf(stderr, "[ecfs_exec]: failed to lseek(%d, %lx, SEEK_SET): %s\n", fd, fdinfo->pos, strerror(errno));
+		exit(-1);
+	} 
 	
 }
 
@@ -161,7 +187,10 @@ int load_ecfs_binary(uint8_t *mapped)
                 /* Until we fix ecfs bug writing some empty segments */
                 if (phdr[i].p_filesz == 0)
                         continue;
-                /* don't remap vsyscall */
+                /* don't remap vsyscall 
+		 * the kernel will do 
+		 * that for us.
+		 */
                 if (phdr[i].p_vaddr == 0xffffffffff600000)
                         continue;
                 segment = mmap((void *)phdr[i].p_vaddr, phdr[i].p_memsz, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);

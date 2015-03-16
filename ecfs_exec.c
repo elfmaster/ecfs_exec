@@ -122,6 +122,7 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 
 void reload_file_desc(fd_info_t *fdinfo)
 {
+	printf("reload_file_desc for fd: %d\n", fdinfo->fd);
 	if (fdinfo->fd <= 3)
 		return;
 	if (fdinfo->net)
@@ -226,8 +227,11 @@ int ecfs_exec(char **argv, const char *filename)
         }
 	
 	int fdcount = get_fd_info(ecfs_desc, &fdinfo);
-	for (i = 0; i < fdcount; i++) 
+	printf("fdcount: %d\n", fdcount);
+	for (i = 0; i < fdcount; i++) {
+		printf("reloading %d\n", i);
 		reload_file_desc(&fdinfo[i]);
+	}
 
 	tramp_addr = create_reg_loader(&regs[0], (unsigned long)entrypoint);
 	tramp_code = (void *)tramp_addr;

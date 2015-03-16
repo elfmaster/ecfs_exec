@@ -95,7 +95,9 @@ typedef struct ecfs_sym {
 typedef struct fdinfo {
         int fd;
         char path[MAX_PATH];
-        struct {
+        loff_t pos;
+	unsigned int perms;
+	struct {
                 struct in_addr src_addr;
                 struct in_addr dst_addr;
                 uint16_t src_port;

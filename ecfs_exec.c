@@ -120,6 +120,23 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	return (unsigned long)trampoline;
 }
 
+void reload_file_desc(fd_info_t *fdinfo)
+{
+	if (fdinfo->fd <= 3)
+		return;
+	if (fdinfo->net)
+		return;
+	if (fdinfo->path[0] == '\0')
+		return;
+	int fd = open(fdinfo->path, fdinfo->perms);
+	if (fd < 0) {
+		perror("open");
+		exit(-1);
+	}
+	lseek(fd, fdinfo->pos, SEEK_SET);
+	
+}
+
 /* 
  * Its very easy to load an ecfs file. The dynamic linker, the stack,
  * the heap, etc. is already in the file so loading it doesn't require
@@ -174,6 +191,7 @@ int ecfs_exec(char **argv, const char *filename)
 	unsigned long tramp_addr;
 	pid_t tid[MAX_THREADS];
 	int status;
+	fd_info_t *fdinfo;
 
 	if ((ecfs_desc = load_ecfs_file(filename)) == NULL) {
 		printf("error loading file: %s\n", argv[1]);
@@ -194,6 +212,11 @@ int ecfs_exec(char **argv, const char *filename)
 	entrypoint = (void *)regs[0].rip;
 	stack = (void *)regs[0].rsp;
 	
+#if DEBUG
+	printf("[+] Using entry point: %lx\n", entrypoint);
+	printf("[+] Using stack vaddr: %lx\n", stack);
+#endif
+
 	do_unmappings(old_prog);
 		
 	ret = load_ecfs_binary(ecfs_desc->mem);
@@ -201,32 +224,37 @@ int ecfs_exec(char **argv, const char *filename)
                 fprintf(stderr, "load_ecfs_binary() failed\n");
                 return -1;
         }
+	
+	int fdcount = get_fd_info(ecfs_desc, &fdinfo);
+	for (i = 0; i < fdcount; i++) 
+		reload_file_desc(&fdinfo[i]);
+
 	tramp_addr = create_reg_loader(&regs[0], (unsigned long)entrypoint);
 	tramp_code = (void *)tramp_addr;
 	tramp_code();
 	
-	tid[0] = getpid();
-	/*
-	 * Now do this for each thread
-	 */
-	if (prcount > 1) {
-		for (i = 1; i < prcount; i++) {
-			entrypoint = (void *)regs[i].rip;
-			tramp_addr = create_reg_loader(&regs[i], (unsigned long)entrypoint);
-			tramp_code = (void *)tramp_addr;
-			tid[i] = fork();
-			if (tid[i] < 0) {
-				fprintf(stderr, "Failed to create thread: %s\n", strerror(errno));
-				exit(-1);
-			}
-			if (tid[i] == 0) {
-				tramp_code();
-				exit(0);
-			}
-			wait(&status);
-		}	
-	}
+		
 	
+	/*
+	 * XXX work on this later
+	for (i = 0; i < prcount; i++) {
+		entrypoint = (void *)regs[i].rip;
+		tramp_addr = create_reg_loader(&regs[i], (unsigned long)entrypoint);
+		tramp_code = (void *)tramp_addr;
+#if DEBUG
+		printf("[+] Launching thread\n");
+#endif
+		tid[i] = fork();
+		if (tid[i] < 0) {
+			fprintf(stderr, "Failed to create thread: %s\n", strerror(errno));
+			exit(-1);
+		}
+		if (tid[i] == 0) {
+			tramp_code();
+		}
+		wait(&status);
+	}	
+	*/
 	exit(0);
 }
 

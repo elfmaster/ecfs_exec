@@ -122,7 +122,6 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 
 void reload_file_desc(fd_info_t *fdinfo)
 {
-	printf("reload_file_desc for fd: %d\n", fdinfo->fd);
 	if (fdinfo->fd <= 3)
 		return;
 	if (fdinfo->net)
@@ -191,7 +190,6 @@ int ecfs_exec(char **argv, const char *filename)
 	void (*tramp_code)(void);
 	unsigned long tramp_addr;
 	pid_t tid[MAX_THREADS];
-	int status;
 	fd_info_t *fdinfo;
 
 	if ((ecfs_desc = load_ecfs_file(filename)) == NULL) {
@@ -227,9 +225,7 @@ int ecfs_exec(char **argv, const char *filename)
         }
 	
 	int fdcount = get_fd_info(ecfs_desc, &fdinfo);
-	printf("fdcount: %d\n", fdcount);
 	for (i = 0; i < fdcount; i++) {
-		printf("reloading %d\n", i);
 		reload_file_desc(&fdinfo[i]);
 	}
 
@@ -239,26 +235,6 @@ int ecfs_exec(char **argv, const char *filename)
 	
 		
 	
-	/*
-	 * XXX work on this later
-	for (i = 0; i < prcount; i++) {
-		entrypoint = (void *)regs[i].rip;
-		tramp_addr = create_reg_loader(&regs[i], (unsigned long)entrypoint);
-		tramp_code = (void *)tramp_addr;
-#if DEBUG
-		printf("[+] Launching thread\n");
-#endif
-		tid[i] = fork();
-		if (tid[i] < 0) {
-			fprintf(stderr, "Failed to create thread: %s\n", strerror(errno));
-			exit(-1);
-		}
-		if (tid[i] == 0) {
-			tramp_code();
-		}
-		wait(&status);
-	}	
-	*/
 	exit(0);
 }
 

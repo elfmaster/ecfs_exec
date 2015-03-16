@@ -2,6 +2,8 @@
 
 #define TRAMP_SIZE 4096
 #define MAX_THREADS 16
+
+__thread long dummy_array[1024];
 /* 
  * This creates a code page with instructions to load 
  * the registers with the register set from the snapshotted

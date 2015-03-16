@@ -22,7 +22,7 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	tptr = trampoline;
 	
         /*
-         * Set rsp
+         * movabsq $regs->rsp, %rsp
          */
         *tptr++ = 0x48;
         *tptr++ = 0xbc;
@@ -129,7 +129,7 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
         tptr += 8;
 	
 	/*
-	 * ret
+	 * retq $0x8
 	 */
 	*tptr++ = 0xc2;
 	*tptr++ = 0x08;

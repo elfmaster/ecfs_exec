@@ -164,30 +164,43 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 void reload_file_desc(fd_info_t *fdinfo)
 {
 	int ret;
+	int fd;
 
 	if (fdinfo->fd <= 3) // 0 - 3 are reserved and will be opened by this process
 		return;
-	if (fdinfo->net) // we don't handle sockets yet
+	if (fdinfo->net) {
+		fd = open("/dev/null", O_RDWR);	// we don't handle sockets yet
 		return;
-	if (fdinfo->path[0] == '\0') 
+	}
+	if (fdinfo->path[0] == '\0') {
+		fd = open("/dev/null", O_RDWR);
 		return;
-	if (strchr(fdinfo->path, ']')) // pipe:[8199] 
+	}
+	if (strchr(fdinfo->path, ']')) {// pipe:[8199] 
+		fd = open("/dev/null", O_RDWR);
 		return; 
-	if (strstr(fdinfo->path, "anon_inode"))
+	}
+	if (strstr(fdinfo->path, "anon_inode")) {
+		fd = open("/dev/null", O_RDWR);
 		return;
+	}
 #if DEBUG
 	fprintf(stderr, "[ecfs_exec] opening %s\n", fdinfo->path);
 #endif
-	int fd = open(fdinfo->path, fdinfo->perms);
+	fd = open(fdinfo->path, fdinfo->perms);
 	if (fd < 0) {
 		fprintf(stderr, "[ecfs_exec]: failed to open(%s, %04x): %s\n", fdinfo->path, fdinfo->perms, strerror(errno));
 		exit(-1);
 	}
-	ret = lseek(fd, fdinfo->pos, SEEK_SET);
-	if (ret < 0) {
-		fprintf(stderr, "[ecfs_exec]: failed to lseek(%d, %lx, SEEK_SET): %s\n", fd, fdinfo->pos, strerror(errno));
-		exit(-1);
-	} 
+	
+	if (fdinfo->pos != 0) {
+		ret = lseek(fd, fdinfo->pos, SEEK_SET);
+		if (ret < 0) {
+			fprintf(stderr, "[ecfs_exec]: failed to lseek(%d, %lx, SEEK_SET): %s\n", fd, fdinfo->pos, strerror(errno));
+			exit(-1);
+		}	
+	}
+	 
 	
 }
 

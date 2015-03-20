@@ -7,9 +7,11 @@ __thread long dummy_array[1024];
 /* 
  * This creates a code page with instructions to load 
  * the registers with the register set from the snapshotted
- * process
+ * process, and then transfers control to the entry point
+ * which is the address of where the process-snapshot left
+ * off.
  */
-static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned long entry)
+static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned long fpreg_va, unsigned long entry)
 {
 	uint8_t *trampoline;
 	uint8_t *tptr;
@@ -21,6 +23,23 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	}
 	tptr = trampoline;
 	
+	/* 
+	 * restore floating point registers
+	 * movq $fpreg_va, %rdi
+	 * fldenv (%rdi)
+	 */
+	if (fpreg_va < (uint32_t)~0x0) {
+		*tptr++ = 0x48;
+		*tptr++ = 0xc7;
+		*tptr++ = 0xc7;
+		*(uint32_t *)tptr = (uint32_t)fpreg_va;
+		tptr += 4;
+	} else {
+		*tptr++ = 0x48;
+		*tptr++ = 0xbf;
+		*(long *)tptr = fpreg_va;
+		tptr += 8;
+	}
         /*
          * movabsq $regs->rsp, %rsp
          */
@@ -146,12 +165,19 @@ void reload_file_desc(fd_info_t *fdinfo)
 {
 	int ret;
 
-	if (fdinfo->fd <= 3)
+	if (fdinfo->fd <= 3) // 0 - 3 are reserved and will be opened by this process
 		return;
-	if (fdinfo->net)
+	if (fdinfo->net) // we don't handle sockets yet
 		return;
-	if (fdinfo->path[0] == '\0')
+	if (fdinfo->path[0] == '\0') 
 		return;
+	if (strchr(fdinfo->path, ']')) // pipe:[8199] 
+		return; 
+	if (strstr(fdinfo->path, "anon_inode"))
+		return;
+#if DEBUG
+	fprintf(stderr, "[ecfs_exec] opening %s\n", fdinfo->path);
+#endif
 	int fd = open(fdinfo->path, fdinfo->perms);
 	if (fd < 0) {
 		fprintf(stderr, "[ecfs_exec]: failed to open(%s, %04x): %s\n", fdinfo->path, fdinfo->perms, strerror(errno));
@@ -220,6 +246,7 @@ int ecfs_exec(char **argv, const char *filename)
 	void *entrypoint, *stack;
 	void (*tramp_code)(void);
 	unsigned long tramp_addr;
+	unsigned long fpreg_addr;
 	pid_t tid[MAX_THREADS];
 	fd_info_t *fdinfo;
 
@@ -249,18 +276,36 @@ int ecfs_exec(char **argv, const char *filename)
 
 	do_unmappings(old_prog);
 		
+	/*
+	 * load ecfs binary into memory to prepare
+	 * for execution.
+	 */
 	ret = load_ecfs_binary(ecfs_desc->mem);
         if (ret == -1) {
                 fprintf(stderr, "load_ecfs_binary() failed\n");
                 return -1;
         }
 	
+	/*
+	 * restore file descriptors
+	 */
 	int fdcount = get_fd_info(ecfs_desc, &fdinfo);
 	for (i = 0; i < fdcount; i++) {
 		reload_file_desc(&fdinfo[i]);
 	}
-
-	tramp_addr = create_reg_loader(&regs[0], (unsigned long)entrypoint);
+	
+	/*
+ 	 * get source location of fpregset_t 
+	 */
+	fpreg_addr = get_section_va(ecfs_desc, ".fpregset");
+		
+		
+	/*
+	 * inject code for restoring register state
+	 * and setting up trampoline for execution on
+	 * entry point.
+	 */
+	tramp_addr = create_reg_loader(&regs[0], fpreg_addr, (unsigned long)entrypoint);
 	tramp_code = (void *)tramp_addr;
 	tramp_code();
 	

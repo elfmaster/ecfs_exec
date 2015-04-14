@@ -11,12 +11,23 @@ __thread long dummy_array[1024];
  * which is the address of where the process-snapshot left
  * off.
  */
-static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned long fpreg_va, unsigned long entry)
+static unsigned long create_reg_loader(struct user_regs_struct *regs, elf_fpregset_t *fpregs, unsigned long entry)
 {
 	uint8_t *trampoline;
 	uint8_t *tptr;
+	uint8_t *fpreg_ptr;
 	
-	trampoline = mmap(NULL, TRAMP_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	fpreg_ptr = mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (fpreg_ptr == MAP_FAILED) {
+		perror("mmap");
+		exit(-1);
+	}
+	/* 
+	 * store floating point registers
+	 */
+	memcpy((void *)fpreg_ptr, (void *)fpregs, sizeof(elf_fpregset_t));
+
+	trampoline = mmap(0x1000000, TRAMP_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED, -1, 0);
 	if (trampoline == MAP_FAILED ) {
 		perror("mmap");
 		exit(-1);
@@ -28,29 +39,53 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	 * movq $fpreg_va, %rdi
 	 * fldenv (%rdi)
 	 */
-	if (fpreg_va < (uint32_t)~0x0) {
+	if ((uintptr_t)fpreg_ptr < (uint32_t)~0x0) {
 		*tptr++ = 0x48;
 		*tptr++ = 0xc7;
 		*tptr++ = 0xc7;
-		*(uint32_t *)tptr = (uint32_t)fpreg_va;
+		*(uint32_t *)tptr = (uint32_t)fpreg_ptr;
 		tptr += 4;
 	} else {
 		*tptr++ = 0x48;
 		*tptr++ = 0xbf;
-		*(long *)tptr = fpreg_va;
+		*(long *)tptr = (uintptr_t)fpreg_ptr;
 		tptr += 8;
 	}
-        /*
+	*tptr++ = 0xd9; // fldenv (%rdi)
+	*tptr++ = 0x27;
+
+        /* Set stack pointer
          * movabsq $regs->rsp, %rsp
          */
         *tptr++ = 0x48;
         *tptr++ = 0xbc;
         *(long *)tptr = regs->rsp;
         tptr += 8;
+	
+	/*
+	 * Restore rflags/eflags
+	 * sub $0x10, %rsp
+	 * movabsq $rflags, %rax
+	 * movq %rax, (%rsp)
+	 * popfq
+	 */
+	*tptr++ = 0x48; // sub $0x10, %rsp
+	*tptr++ = 0x83;
+	*tptr++ = 0xec;
+	*tptr++ = 0x10;
+	*tptr++ = 0x48; // movabsq $rflags, %rax
+	*tptr++ = 0xb8;
+	*(long *)tptr = regs->eflags;
+	tptr += 8;
+	*tptr++ = 0x48; // movq %rax, (%rsp)
+	*tptr++ = 0x89;
+	*tptr++ = 0x04;
+	*tptr++ = 0x24;
+	*tptr++ = 0x9d; // popfq
 
 	/*
 	 * Store entry point address at top of stack
-	 * sub 0x8, %rsp
+	 * sub 0x10, %rsp
 	 */
 	*tptr++ = 0x48;
 	*tptr++ = 0x83;
@@ -151,7 +186,7 @@ static unsigned long create_reg_loader(struct user_regs_struct *regs, unsigned l
 	 * retq $0x8
 	 */
 	*tptr++ = 0xc2;
-	*tptr++ = 0x08;
+	*tptr++ = 0x10;
 	*tptr++ = 0x00;
 
 	return (unsigned long)trampoline;
@@ -310,15 +345,19 @@ int ecfs_exec(char **argv, const char *filename)
 	/*
  	 * get source location of fpregset_t 
 	 */
-	fpreg_addr = get_section_va(ecfs_desc, ".fpregset");
-		
+	elf_fpregset_t *fpregs;
+	ret = get_section_pointer(ecfs_desc, ".fpregset", (uint8_t **)&fpregs);
+	if (ret < 0) {
+		printf("get_section_pointer() failed\n");
+		exit(-1);
+	}
 		
 	/*
 	 * inject code for restoring register state
 	 * and setting up trampoline for execution on
 	 * entry point.
 	 */
-	tramp_addr = create_reg_loader(&regs[0], fpreg_addr, (unsigned long)entrypoint);
+	tramp_addr = create_reg_loader(&regs[0], fpregs, (unsigned long)entrypoint);
 	tramp_code = (void *)tramp_addr;
 	tramp_code();
 	
